@@ -13,7 +13,9 @@ import {
   QueryList,
   EventEmitter,
   ViewEncapsulation,
+  Inject,
 } from '@angular/core'
+import { DOCUMENT } from '@angular/common'
 import { Observable, Subscriber, Subject } from 'rxjs'
 import { debounceTime } from 'rxjs/operators'
 
@@ -85,6 +87,7 @@ import {
   encapsulation: ViewEncapsulation.Emulated,
 })
 export class SplitComponent implements AfterViewInit, OnDestroy {
+  private _document: Document
   private _direction: 'horizontal' | 'vertical' = 'horizontal'
 
   @Input() set direction(v: 'horizontal' | 'vertical') {
@@ -235,7 +238,11 @@ export class SplitComponent implements AfterViewInit, OnDestroy {
 
   private isDragging: boolean = false
   private isWaitingClear: boolean = false
-  private dragListeners: Array<Function> = []
+  private dragListeners: Array<{
+    event: string
+    handler: (event: Event) => void
+    options?: AddEventListenerOptions
+  }> = []
   private snapshot: ISplitSnapshot | null = null
   private startPoint: IPoint | null = null
   private endPoint: IPoint | null = null
@@ -250,9 +257,12 @@ export class SplitComponent implements AfterViewInit, OnDestroy {
     private elRef: ElementRef,
     private cdRef: ChangeDetectorRef,
     private renderer: Renderer2,
+    @Inject(DOCUMENT) _document: any,
   ) {
     // To force adding default class, could be override by user @Input() or not
     this.direction = this._direction
+
+    this._document = _document
   }
 
   public ngAfterViewInit() {
@@ -570,13 +580,13 @@ export class SplitComponent implements AfterViewInit, OnDestroy {
       return
     }
 
-    this.dragListeners.push(this.renderer.listen('document', 'mouseup', this.stopDragging.bind(this)))
-    this.dragListeners.push(this.renderer.listen('document', 'touchend', this.stopDragging.bind(this)))
-    this.dragListeners.push(this.renderer.listen('document', 'touchcancel', this.stopDragging.bind(this)))
+    this.setDragListener('mouseup', this.stopDragging.bind(this))
+    this.setDragListener('touchend', this.stopDragging.bind(this))
+    this.setDragListener('touchcancel', this.stopDragging.bind(this))
 
     this.ngZone.runOutsideAngular(() => {
-      this.dragListeners.push(this.renderer.listen('document', 'mousemove', this.dragEvent.bind(this)))
-      this.dragListeners.push(this.renderer.listen('document', 'touchmove', this.dragEvent.bind(this)))
+      this.setDragListener('mousemove', this.dragEvent.bind(this), { passive: false, capture: false })
+      this.setDragListener('touchmove', this.dragEvent.bind(this), { passive: false, capture: false })
     })
 
     this.displayedAreas.forEach((area) => area.component.lockEvents())
@@ -701,6 +711,15 @@ export class SplitComponent implements AfterViewInit, OnDestroy {
     this.notify('progress', this.snapshot.gutterNum)
   }
 
+  private setDragListener(event: string, handler: (event: Event) => void, options?: AddEventListenerOptions) {
+    this.dragListeners.push({
+      event,
+      handler,
+      options,
+    })
+    this._document.addEventListener(event, handler, options)
+  }
+
   private stopDragging(event?: Event): void {
     if (event) {
       event.preventDefault()
@@ -714,8 +733,8 @@ export class SplitComponent implements AfterViewInit, OnDestroy {
     this.displayedAreas.forEach((area) => area.component.unlockEvents())
 
     while (this.dragListeners.length > 0) {
-      const fct = this.dragListeners.pop()
-      if (fct) fct()
+      const config = this.dragListeners.pop()
+      this._document.removeEventListener(config.event, config.handler, config.options)
     }
 
     // Warning: Have to be before "notify('end')"
